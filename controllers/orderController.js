@@ -5,7 +5,7 @@ const uri = process.env.MESSAGE_BROKER;
 const port = process.env.MESSAGE_BROKER_PORT;
 
 const insertOrder = async (req, res) => {
-  const { fromDate, duration, message } = req.body;
+  const { fromDate, duration, message, amount } = req.body;
   const { kosId, roomId } = req.params;
 
   try {
@@ -13,6 +13,7 @@ const insertOrder = async (req, res) => {
       fromDate,
       duration,
       message,
+      amount,
       kosId,
       roomId,
       customerId: req.user._id,
@@ -27,11 +28,86 @@ const insertOrder = async (req, res) => {
   }
 };
 
+const getOrdersByCustomer = async (req, res) => {
+  try {
+    const orders = await Order.find({ customerId: req.user._id });
+
+    res.json({ orders });
+  } catch (error) {
+    res.status(500).json({ error });
+  }
+};
+
 const getOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
 
-    res.json({ order });
+    amqp.connect(`${uri}:${port}`, (err, conn) => {
+      if (err) throw err;
+
+      conn.createChannel((err, channel) => {
+        if (err) throw err;
+
+        // room_queue
+        const queueName = "room_queue";
+
+        channel.assertQueue(queueName, {
+          durable: false,
+        });
+
+        channel.assertQueue("room_queue_reply", { durable: false });
+
+        channel.sendToQueue(queueName, Buffer.from(order.roomId), {
+          replyTo: "room_queue_reply",
+        });
+
+        const roomPromise = new Promise((resolve, reject) => {
+          channel.consume(
+            "room_queue_reply",
+            (msg) => {
+              const room = JSON.parse(msg.content.toString());
+
+              if (!room) reject("Error get room");
+
+              resolve(room);
+            },
+            { noAck: true }
+          );
+        });
+        // end room_queue
+
+        roomPromise.then((room) => {
+          // user_queue
+          const queueName2 = "user_queue";
+
+          channel.assertQueue(queueName2, {
+            durable: false,
+          });
+
+          channel.assertQueue("user_queue_reply", { durable: false });
+
+          channel.sendToQueue(queueName2, Buffer.from(order.customerId), {
+            replyTo: "user_queue_reply",
+          });
+
+          channel.consume(
+            "user_queue_reply",
+            (msg) => {
+              const user = JSON.parse(msg.content.toString());
+
+              // if (!user) return res.json({ message: "Error get user" });
+
+              res.json({ order, room, user });
+
+              channel.close();
+              conn.close();
+            },
+            { noAck: true }
+          );
+          // end user_queue
+        });
+      });
+    });
   } catch (error) {
     res.status(500).json({ error });
   }
@@ -54,8 +130,6 @@ const getOrdersPerKos = async (req, res) => {
         durable: false,
       });
 
-      console.log(`Sending request for kos with slug: ${kosSlug}`);
-
       channel.assertQueue("kos_queue_reply", { durable: false });
 
       channel.sendToQueue(queueName, Buffer.from(kosSlug), {
@@ -66,9 +140,12 @@ const getOrdersPerKos = async (req, res) => {
         "kos_queue_reply",
         async (msg) => {
           const kosDetail = JSON.parse(msg.content.toString());
-          console.log(`Received response for kos with slug: ${kosSlug}`);
 
           const ordersPerKos = await Order.find({ kosId: kosDetail._id });
+
+          // if (!ordersPerKos)
+          //   return res.json({ message: "Error get orders per kos" });
+
           res.json({ ordersPerKos });
 
           channel.close();
@@ -83,7 +160,7 @@ const getOrdersPerKos = async (req, res) => {
 const verifyOrder = async (req, res) => {
   const { status } = req.body;
 
-  const newStatus = parseInt(status) === 1 ? "accepted" : "rejected";
+  const newStatus = parseInt(status) === 1 ? "ACCEPTED" : "REJECTED";
 
   try {
     const order = await Order.findByIdAndUpdate(
@@ -103,4 +180,10 @@ const verifyOrder = async (req, res) => {
   }
 };
 
-module.exports = { insertOrder, getOrder, getOrdersPerKos, verifyOrder };
+module.exports = {
+  insertOrder,
+  getOrdersByCustomer,
+  getOrder,
+  getOrdersPerKos,
+  verifyOrder,
+};

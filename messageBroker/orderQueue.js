@@ -5,7 +5,7 @@ const uri = process.env.MESSAGE_BROKER;
 const port = process.env.MESSAGE_BROKER_PORT;
 
 // Memproduksi detail order
-const orderQueue = () => {
+const publishOrder = () => {
   amqp.connect(`${uri}:${port}`, (err, conn) => {
     if (err) throw err;
 
@@ -18,13 +18,10 @@ const orderQueue = () => {
         durable: false,
       });
 
-      console.log(`Waiting for requests from ${queueName}`);
-
       channel.consume(
         queueName,
         async (msg) => {
           const orderId = msg.content.toString();
-          console.log(`Received request for order with id: ${orderId}`);
 
           // Process the request and send response back to message broker
           const order = await Order.findById(orderId);
@@ -46,4 +43,38 @@ const orderQueue = () => {
   });
 };
 
-module.exports = { orderQueue };
+// Mengubah status order ke UNPAID
+const subscribeTransactionEvent = () => {
+  amqp.connect(`${uri}:${port}`, (err, conn) => {
+    if (err) throw err;
+
+    conn.createChannel((err, channel) => {
+      if (err) throw err;
+
+      const queueName = "transaction_created";
+
+      channel.assertQueue(queueName, {
+        durable: false,
+      });
+
+      channel.consume(
+        queueName,
+        async (msg) => {
+          const orderId = msg.content.toString();
+
+          const order = await Order.findById(orderId);
+
+          if (!order) return;
+
+          order.status = "UNPAID";
+          order.save();
+
+          // channel.ack(msg);
+        },
+        { noAck: true }
+      );
+    });
+  });
+};
+
+module.exports = { publishOrder, subscribeTransactionEvent };

@@ -14,9 +14,13 @@ const orderSchema = mongoose.Schema(
       type: String,
       default: null,
     },
+    amount: {
+      type: Number,
+      required: true,
+    },
     status: {
       type: String,
-      default: "waiting",
+      default: "WAITING",
     },
     roomId: {
       type: mongoose.Schema.Types.ObjectId,

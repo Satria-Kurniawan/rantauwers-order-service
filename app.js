@@ -4,7 +4,10 @@ const dotenv = require("dotenv").config();
 const port = process.env.PORT || 6003;
 const connectToDatabase = require("./config/database");
 const { errorHandler } = require("./middlewares/errorHandler");
-const { orderQueue } = require("./messageBroker/orderQueue");
+const {
+  publishOrder,
+  subscribeTransactionEvent,
+} = require("./messageBroker/orderQueue");
 
 connectToDatabase();
 
@@ -14,7 +17,8 @@ app.use(express.urlencoded({ extended: false }));
 app.use("/api/order", require("./routes/orderRoutes"));
 
 // Message Broker
-orderQueue();
+publishOrder();
+subscribeTransactionEvent();
 //
 
 app.use(errorHandler);
